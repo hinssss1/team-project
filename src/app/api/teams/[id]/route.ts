@@ -2,8 +2,6 @@ import { NextRequest, NextResponse } from 'next/server'
 import { teamService } from '@/lib/services/team.service'
 import { updateTeamSchema } from '@/lib/utils/validation'
 import { z } from 'zod'
-import { promises as fs } from 'fs'
-import path from 'path'
 
 export async function GET(
   request: NextRequest,
@@ -16,19 +14,13 @@ export async function GET(
       return NextResponse.json({ error: 'Team not found' }, { status: 404 })
     }
 
-    const profileDir = path.join(process.cwd(), '.automation-profiles', team.id)
-    const profileExists = await fs
-      .access(profileDir)
-      .then(() => true)
-      .catch(() => false)
-
-    const { password, cookies, ...rest } = team as any
+    const { accessToken, ...rest } = team as any
 
     return NextResponse.json({
       ...rest,
+      hasToken: Boolean(accessToken),
       lastLoginCheckAt: team.lastLoginCheckAt,
       loginError: team.loginError,
-      loginInitialized: Boolean(cookies) || profileExists,
     })
   } catch (error) {
     console.error('Error fetching team:', error)

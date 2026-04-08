@@ -74,6 +74,8 @@ export default function EditTeamPage({ params }: { params: { id: string } }) {
         initialData={{
           name: team.name,
           email: team.email,
+          chatgptAccountId: team.chatgptAccountId || '',
+          oaiDeviceId: team.oaiDeviceId || '',
           description: team.description,
           teamUrl: team.teamUrl,
         }}

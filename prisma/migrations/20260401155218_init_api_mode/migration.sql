@@ -3,10 +3,14 @@ CREATE TABLE "Team" (
     "id" TEXT NOT NULL PRIMARY KEY,
     "name" TEXT NOT NULL,
     "email" TEXT NOT NULL,
-    "password" TEXT NOT NULL,
+    "accessToken" TEXT NOT NULL,
+    "chatgptAccountId" TEXT NOT NULL,
+    "oaiDeviceId" TEXT,
     "description" TEXT,
     "teamUrl" TEXT,
     "status" TEXT NOT NULL DEFAULT 'active',
+    "lastLoginCheckAt" DATETIME,
+    "loginError" TEXT,
     "tags" TEXT,
     "autoInvite" BOOLEAN NOT NULL DEFAULT false,
     "inviteIntervalMs" INTEGER NOT NULL DEFAULT 3000,
@@ -49,16 +53,6 @@ CREATE TABLE "InviteJob" (
     CONSTRAINT "InviteJob_teamId_fkey" FOREIGN KEY ("teamId") REFERENCES "Team" ("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
--- CreateTable
-CREATE TABLE "Admin" (
-    "id" TEXT NOT NULL PRIMARY KEY,
-    "email" TEXT NOT NULL,
-    "password" TEXT NOT NULL,
-    "name" TEXT,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" DATETIME NOT NULL
-);
-
 -- CreateIndex
 CREATE INDEX "Team_status_idx" ON "Team"("status");
 
@@ -82,6 +76,3 @@ CREATE INDEX "InviteJob_status_idx" ON "InviteJob"("status");
 
 -- CreateIndex
 CREATE INDEX "InviteJob_createdAt_idx" ON "InviteJob"("createdAt");
-
--- CreateIndex
-CREATE UNIQUE INDEX "Admin_email_key" ON "Admin"("email");

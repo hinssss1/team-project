@@ -1,11 +1,8 @@
 import prisma from '@/lib/prisma'
-import { decrypt } from '@/lib/utils/crypto'
 import { CreateInviteJobInput } from '@/lib/utils/validation'
 import { InviteJob } from '@prisma/client'
-import { OpenAIAutomationClient } from '@/lib/automation/openai-client'
+import { inviteMember, AccountCredentials } from '@/lib/automation/chatgpt-api'
 import { memberService } from './member.service'
-import { promises as fs } from 'fs'
-import path from 'path'
 
 interface InviteJobLog {
   timestamp: string
@@ -13,6 +10,8 @@ interface InviteJobLog {
   status: 'success' | 'failed'
   error?: string
 }
+
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
 export class InviteService {
   async getInviteJobsByTeamId(teamId: string): Promise<InviteJob[]> {
@@ -30,7 +29,6 @@ export class InviteService {
   }
 
   async createInviteJob(input: CreateInviteJobInput): Promise<InviteJob> {
-    // Create member records for all emails
     await memberService.createMembers(input.teamId, input.emails)
 
     return await prisma.inviteJob.create({
@@ -61,7 +59,6 @@ export class InviteService {
     }
 
     try {
-      // Update job status to running
       await prisma.inviteJob.update({
         where: { id: jobId },
         data: {
@@ -73,184 +70,75 @@ export class InviteService {
       const emails: string[] = JSON.parse(job.emails)
       const logs: InviteJobLog[] = []
 
-      // Get team credentials
-      const password = decrypt(job.team.password)
-
-      // Initialize automation client
-      const client = new OpenAIAutomationClient()
-      const profileRoot =
-        process.env.OPENAI_AUTOMATION_PROFILE_DIR ||
-        path.join(process.cwd(), '.automation-profiles')
-      const profileDir = path.join(profileRoot, job.teamId)
-      await fs.mkdir(profileDir, { recursive: true })
-      await client.initialize({ userDataDir: profileDir })
-
-      // 获取page对象
-      const page = (client as any).page
-      if (!page) {
-        throw new Error('无法获取浏览器页面对象')
+      const creds: AccountCredentials = {
+        accessToken: job.team.accessToken,
+        chatgptAccountId: job.team.chatgptAccountId,
+        oaiDeviceId: job.team.oaiDeviceId,
       }
 
-      await page.goto('https://chatgpt.com/', {
-        waitUntil: 'domcontentloaded',
-        timeout: 30000,
-      })
-      await new Promise(resolve => setTimeout(resolve, 1000))
+      let successCount = 0
+      let failCount = 0
 
-      // 尝试使用cookies自动登录
-      let needsLogin = !(await client.isChatGPTLoggedIn())
-      if (!needsLogin) {
-        console.log('已检测到登录状态，跳过登录')
-      }
-      if (needsLogin && job.team.cookies) {
-        try {
-          console.log('步骤1: 尝试使用已保存的登录信息...')
+      for (let i = 0; i < emails.length; i++) {
+        const email = emails[i]
 
-          // 设置cookies
-          const cookies = JSON.parse(job.team.cookies)
-          await page.setCookie(...cookies)
+        const result = await inviteMember(creds, email)
 
-          console.log('Cookies已设置，重新加载页面...')
-
-          // 重新加载页面以应用cookies
-          await page.goto('https://chatgpt.com/', {
-            waitUntil: 'networkidle2',
-            timeout: 30000,
-          })
-
-          await new Promise(resolve => setTimeout(resolve, 2000))
-
-          // 检查是否已登录
-          const isLoggedIn = await client.isChatGPTLoggedIn()
-          console.log('当前URL:', page.url())
-
-          if (isLoggedIn) {
-            console.log('使用已保存的登录信息成功！')
-            needsLogin = false
-          } else {
-            console.log('Cookies已过期或未登录，需要重新登录')
-          }
-        } catch (error) {
-          console.log('加载cookies失败，需要重新登录:', error)
+        const log: InviteJobLog = {
+          timestamp: new Date().toISOString(),
+          email,
+          status: result.success ? 'success' : 'failed',
+          error: result.error,
         }
-      }
+        logs.push(log)
 
-      // 如果需要登录，使用ChatGPT登录流程
-      if (needsLogin) {
-        console.log('步骤1: 登录 ChatGPT...')
-        const loginSuccess = await client.loginChatGPT(job.team.email, password, {
-          allowManual: process.env.OPENAI_AUTOMATION_INTERACTIVE === 'true',
+        if (result.success) {
+          successCount++
+        } else {
+          failCount++
+        }
+
+        const member = await prisma.member.findUnique({
+          where: { teamId_email: { teamId: job.teamId, email } },
         })
-        if (!loginSuccess) {
-          await client.close()
 
-          await prisma.inviteJob.update({
-            where: { id: jobId },
-            data: {
-              status: 'failed',
-              completedAt: new Date(),
-              logs: JSON.stringify([
-                {
-                  timestamp: new Date().toISOString(),
-                  error: 'Login failed',
-                },
-              ]),
-            },
-          })
-
-          return { success: false, message: 'Login failed' }
+        if (member) {
+          await memberService.updateMemberStatus(
+            member.id,
+            result.success ? 'invited' : 'failed',
+            result.error
+          )
         }
 
-        // 保存新的cookies
-        if (page) {
-          const newCookies = await page.cookies()
-          await prisma.team.update({
-            where: { id: job.teamId },
-            data: {
-              cookies: JSON.stringify(newCookies),
-            },
-          })
+        await prisma.inviteJob.update({
+          where: { id: jobId },
+          data: { successCount, failCount, logs: JSON.stringify(logs) },
+        })
+
+        if (i < emails.length - 1) {
+          await sleep(job.team.inviteIntervalMs)
         }
       }
 
-      // 直接导航到成员管理页面
-      console.log('步骤2: 导航到成员管理页面...')
-      const navigated = await client.navigateToChatGPTMembers('members')
-      if (!navigated) {
-        throw new Error('无法导航到成员管理页面（可能需要选择工作空间）')
-      }
-
-      if (!(await client.isChatGPTLoggedIn())) {
-        throw new Error('未登录或会话已失效，无法访问成员管理页面')
-      }
-
-      // Invite members with progress tracking
-      const result = await client.inviteMembers(emails, {
-        delayMs: job.team.inviteIntervalMs,
-        onProgress: async (progress) => {
-          const log: InviteJobLog = {
-            timestamp: new Date().toISOString(),
-            email: progress.email,
-            status: progress.status,
-            error: progress.error,
-          }
-          logs.push(log)
-
-          // Update member status
-          const member = await prisma.member.findUnique({
-            where: {
-              teamId_email: {
-                teamId: job.teamId,
-                email: progress.email,
-              },
-            },
-          })
-
-          if (member) {
-            await memberService.updateMemberStatus(
-              member.id,
-              progress.status === 'success' ? 'invited' : 'failed',
-              progress.error
-            )
-          }
-
-          // Update job progress
-          await prisma.inviteJob.update({
-            where: { id: jobId },
-            data: {
-              successCount: logs.filter((l) => l.status === 'success').length,
-              failCount: logs.filter((l) => l.status === 'failed').length,
-              logs: JSON.stringify(logs),
-            },
-          })
-        },
-      })
-
-      await client.close()
-
-      // Update job status to completed
       await prisma.inviteJob.update({
         where: { id: jobId },
         data: {
           status: 'completed',
           completedAt: new Date(),
-          successCount: result.success,
-          failCount: result.failed,
+          successCount,
+          failCount,
           logs: JSON.stringify(logs),
         },
       })
 
-      // Update team stats
       await prisma.team.update({
         where: { id: job.teamId },
-        data: {
-          lastInviteAt: new Date(),
-        },
+        data: { lastInviteAt: new Date() },
       })
 
       return {
         success: true,
-        message: `Completed: ${result.success} successful, ${result.failed} failed`,
+        message: `完成: ${successCount} 成功, ${failCount} 失败`,
       }
     } catch (error) {
       console.error('Error executing invite job:', error)
@@ -271,7 +159,7 @@ export class InviteService {
 
       return {
         success: false,
-        message: `Job failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        message: `任务失败: ${error instanceof Error ? error.message : '未知错误'}`,
       }
     }
   }

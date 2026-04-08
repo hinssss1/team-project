@@ -2,33 +2,21 @@ import { NextRequest, NextResponse } from 'next/server'
 import { teamService } from '@/lib/services/team.service'
 import { createTeamSchema } from '@/lib/utils/validation'
 import { z } from 'zod'
-import { promises as fs } from 'fs'
-import path from 'path'
 
 export async function GET() {
   try {
     const teams = await teamService.getAllTeams()
-    const result = await Promise.all(
-      teams.map(async (team) => {
-        const profileDir = path.join(process.cwd(), '.automation-profiles', team.id)
-        const profileExists = await fs
-          .access(profileDir)
-          .then(() => true)
-          .catch(() => false)
-
-        return {
-          id: team.id,
-          name: team.name,
-          email: team.email,
-          status: team.status,
-          memberCount: team.memberCount,
-          createdAt: team.createdAt,
-          lastLoginCheckAt: team.lastLoginCheckAt,
-          loginError: team.loginError,
-          loginInitialized: Boolean(team.cookies) || profileExists,
-        }
-      })
-    )
+    const result = teams.map((team) => ({
+      id: team.id,
+      name: team.name,
+      email: team.email,
+      chatgptAccountId: team.chatgptAccountId,
+      status: team.status,
+      memberCount: team.memberCount,
+      createdAt: team.createdAt,
+      lastLoginCheckAt: team.lastLoginCheckAt,
+      loginError: team.loginError,
+    }))
     return NextResponse.json(result)
   } catch (error) {
     console.error('Error fetching teams:', error)

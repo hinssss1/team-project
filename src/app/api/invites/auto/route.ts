@@ -2,8 +2,6 @@ import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import prisma from '@/lib/prisma'
 import { inviteService } from '@/lib/services/invite.service'
-import { promises as fs } from 'fs'
-import path from 'path'
 
 const autoInviteSchema = z.object({
   emails: z.array(z.string().email()).min(1, 'At least one email is required'),
@@ -25,29 +23,16 @@ export async function POST(request: NextRequest) {
       select: {
         id: true,
         name: true,
-        cookies: true,
-        createdAt: true,
+        accessToken: true,
+        chatgptAccountId: true,
         memberCount: true,
       },
     })
 
-    const eligible = []
-    for (const team of candidates) {
-      const profileDir = path.join(process.cwd(), '.automation-profiles', team.id)
-      const profileExists = await fs
-        .access(profileDir)
-        .then(() => true)
-        .catch(() => false)
-
-      if (!team.cookies && !profileExists) continue
-
-      eligible.push(team)
-    }
-
-    const selected = eligible[0]
+    const selected = candidates.find(t => t.accessToken && t.chatgptAccountId)
     if (!selected) {
       return NextResponse.json(
-        { error: 'No eligible team with available seats (or login not initialized)' },
+        { error: '没有可用的团队（需要有效的 token 和可用席位）' },
         { status: 400 }
       )
     }
@@ -84,4 +69,3 @@ export async function POST(request: NextRequest) {
     )
   }
 }
-

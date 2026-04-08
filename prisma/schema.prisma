@@ -1,6 +1,3 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -11,23 +8,22 @@ datasource db {
 }
 
 model Team {
-  id          String   @id @default(cuid())
-  name        String
-  email       String
-  password    String   // Encrypted password
-  cookies     String?  // JSON array of cookies from assisted login
-  description String?
-  teamUrl     String?  // OpenAI Team URL
-  status      String   @default("active") // active, inactive, error
+  id               String   @id @default(cuid())
+  name             String
+  email            String   // 账号邮箱（仅作标识）
+  accessToken      String   // ChatGPT Bearer token
+  chatgptAccountId String   // workspace account ID
+  oaiDeviceId      String?  // 可选设备 ID
+  description      String?
+  teamUrl          String?
+  status           String   @default("active") // active, inactive, error
   lastLoginCheckAt DateTime?
-  loginError   String?
-  tags        String?  // JSON array of tags
+  loginError       String?
+  tags             String?
 
-  // Configuration
   autoInvite       Boolean @default(false)
   inviteIntervalMs Int     @default(3000)
 
-  // Statistics
   memberCount      Int @default(0)
   lastSyncAt       DateTime?
   lastInviteAt     DateTime?
@@ -35,7 +31,6 @@ model Team {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  // Relations
   members    Member[]
   inviteJobs InviteJob[]
 
@@ -46,14 +41,14 @@ model Team {
 model Member {
   id        String   @id @default(cuid())
   email     String
-  role      String   @default("member") // member, admin
+  role      String   @default("member")
   status    String   @default("pending") // pending, invited, joined, failed
 
   teamId    String
   team      Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
 
-  invitedAt DateTime?
-  joinedAt  DateTime?
+  invitedAt  DateTime?
+  joinedAt   DateTime?
   failReason String?
 
   createdAt DateTime @default(now())
@@ -86,14 +81,4 @@ model InviteJob {
   @@index([teamId])
   @@index([status])
   @@index([createdAt])
-}
-
-model Admin {
-  id        String   @id @default(cuid())
-  email     String   @unique
-  password  String   // Hashed password
-  name      String?
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
 }

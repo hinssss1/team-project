@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { Button } from '@/components/ui/button'
 import {
@@ -29,7 +29,6 @@ import {
   Loader2,
   RefreshCw,
   UserPlus,
-  Eye,
 } from 'lucide-react'
 import {
   Dialog,
@@ -40,6 +39,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 
@@ -47,9 +47,10 @@ interface Team {
   id: string
   name: string
   email: string
+  chatgptAccountId: string
   status: string
   memberCount: number
-  loginInitialized?: boolean
+  hasToken?: boolean
   lastLoginCheckAt?: string
   loginError?: string | null
   description?: string
@@ -64,26 +65,17 @@ export default function TeamDetailPage({ params }: { params: { id: string } }) {
   const [team, setTeam] = useState<Team | null>(null)
   const [loading, setLoading] = useState(true)
   const [verifying, setVerifying] = useState(false)
-  const [initLoggingIn, setInitLoggingIn] = useState(false)
-  const [checkingLogin, setCheckingLogin] = useState(false)
   const [syncing, setSyncing] = useState(false)
-  const [assistedSyncing, setAssistedSyncing] = useState(false)
   const [inviteDialogOpen, setInviteDialogOpen] = useState(false)
+  const [refreshDialogOpen, setRefreshDialogOpen] = useState(false)
   const [emailsText, setEmailsText] = useState('')
+  const [refreshToken, setRefreshToken] = useState('')
   const [inviting, setInviting] = useState(false)
-  const lastAlertRef = useRef<{ loggedIn?: boolean; full?: boolean }>({})
+  const [refreshing, setRefreshing] = useState(false)
 
   useEffect(() => {
     fetchTeam()
   }, [])
-
-  useEffect(() => {
-    if (!team?.id) return
-    const interval = setInterval(() => {
-      checkLoginSilently()
-    }, 15 * 60 * 1000)
-    return () => clearInterval(interval)
-  }, [team?.id])
 
   const fetchTeam = async () => {
     try {
@@ -98,60 +90,10 @@ export default function TeamDetailPage({ params }: { params: { id: string } }) {
     }
   }
 
-  const verifyCredentials = async () => {
+  const verifyToken = async () => {
     setVerifying(true)
     try {
       const response = await fetch(`/api/teams/${params.id}/verify`, {
-        method: 'POST',
-      })
-      const result = await response.json()
-      alert(result.message)
-      fetchTeam()
-    } catch (error) {
-      alert('验证失败，请重试')
-    } finally {
-      setVerifying(false)
-    }
-  }
-
-  const checkLoginSilently = async () => {
-    try {
-      const response = await fetch(`/api/teams/${params.id}/check-login`, {
-        method: 'POST',
-      })
-      const result = await response.json()
-      const isLoggedIn = Boolean(result.loggedIn)
-      const isFull =
-        typeof result.seatsRemaining === 'number' && result.seatsRemaining <= 0
-
-      if (
-        lastAlertRef.current.loggedIn !== undefined &&
-        lastAlertRef.current.loggedIn === true &&
-        isLoggedIn === false &&
-        result.initialized
-      ) {
-        alert(`账号登录失效：${result.message}`)
-      }
-
-      if (
-        lastAlertRef.current.full !== undefined &&
-        lastAlertRef.current.full === false &&
-        isFull
-      ) {
-        alert('成员已满（5/5），无法继续邀请新成员')
-      }
-
-      lastAlertRef.current = { loggedIn: isLoggedIn, full: isFull }
-      fetchTeam()
-    } catch {
-      // ignore background errors
-    }
-  }
-
-  const checkLogin = async () => {
-    setCheckingLogin(true)
-    try {
-      const response = await fetch(`/api/teams/${params.id}/check-login`, {
         method: 'POST',
       })
       const result = await response.json()
@@ -159,39 +101,12 @@ export default function TeamDetailPage({ params }: { params: { id: string } }) {
         typeof result.memberCount === 'number' && typeof result.memberLimit === 'number'
           ? `\n成员数（含账号）：${result.memberCount}/${result.memberLimit}\n可用席位：${result.seatsRemaining ?? '-'}`
           : ''
-      alert((result.message || (response.ok ? '检测完成' : '检测失败')) + memberInfo)
+      alert(result.message + memberInfo)
       fetchTeam()
     } catch (error) {
-      alert('检测失败：' + (error instanceof Error ? error.message : '未知错误'))
+      alert('验证失败：' + (error instanceof Error ? error.message : '未知错误'))
     } finally {
-      setCheckingLogin(false)
-    }
-  }
-
-  const initLogin = async () => {
-    if (
-      !confirm(
-        '将打开浏览器窗口，请完成 ChatGPT 登录（可能包含验证码/2FA）。完成后会保存登录状态，后续无需重复登录。是否继续？'
-      )
-    ) {
-      return
-    }
-
-    setInitLoggingIn(true)
-    try {
-      const response = await fetch(`/api/teams/${params.id}/init-login`, {
-        method: 'POST',
-      })
-      const result = await response.json()
-      alert(result.message || (response.ok ? '初始化登录成功' : '初始化登录失败'))
-      fetchTeam()
-    } catch (error) {
-      alert(
-        '初始化登录失败：' +
-          (error instanceof Error ? error.message : '未知错误')
-      )
-    } finally {
-      setInitLoggingIn(false)
+      setVerifying(false)
     }
   }
 
@@ -211,30 +126,33 @@ export default function TeamDetailPage({ params }: { params: { id: string } }) {
     }
   }
 
-  const assistedSyncMembers = async () => {
-    if (!confirm('将打开浏览器窗口，请在浏览器中手动选择工作空间。是否继续？')) {
+  const handleRefreshToken = async () => {
+    if (!refreshToken.trim()) {
+      alert('请输入 Refresh Token')
       return
     }
 
-    setAssistedSyncing(true)
+    setRefreshing(true)
     try {
-      const response = await fetch(`/api/teams/${params.id}/assisted-sync`, {
+      const response = await fetch(`/api/teams/${params.id}/refresh-token`, {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refreshToken: refreshToken.trim() }),
       })
       const result = await response.json()
 
-      if (result.success) {
-        alert(
-          `${result.message}\n\n找到的成员：\n${result.members?.join('\n') || '无'}`
-        )
+      if (response.ok) {
+        alert(`Token 刷新成功！有效期：${result.expiresIn} 秒`)
+        setRefreshDialogOpen(false)
+        setRefreshToken('')
         fetchTeam()
       } else {
-        alert(result.message || '同步失败')
+        alert(result.error || '刷新失败')
       }
     } catch (error) {
-      alert('同步失败：' + (error instanceof Error ? error.message : '未知错误'))
+      alert('刷新失败：' + (error instanceof Error ? error.message : '未知错误'))
     } finally {
-      setAssistedSyncing(false)
+      setRefreshing(false)
     }
   }
 
@@ -244,7 +162,6 @@ export default function TeamDetailPage({ params }: { params: { id: string } }) {
       return
     }
 
-    // 解析邮箱列表（支持逗号、分号、换行符分隔）
     const emails = emailsText
       .split(/[,;\n]/)
       .map(email => email.trim())
@@ -255,7 +172,6 @@ export default function TeamDetailPage({ params }: { params: { id: string } }) {
       return
     }
 
-    // 简单的邮箱验证
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
     const invalidEmails = emails.filter(email => !emailRegex.test(email))
     if (invalidEmails.length > 0) {
@@ -267,30 +183,17 @@ export default function TeamDetailPage({ params }: { params: { id: string } }) {
     try {
       const response = await fetch('/api/invites', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          teamId: params.id,
-          emails: emails,
-        }),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ teamId: params.id, emails }),
       })
 
-      if (!response.ok) {
-        throw new Error('创建邀请任务失败')
-      }
+      if (!response.ok) throw new Error('创建邀请任务失败')
 
-      const job = await response.json()
-      alert(`邀请任务已创建！\n正在邀请 ${emails.length} 个成员，请稍候刷新查看进度。`)
-
-      // 关闭对话框并清空输入
+      alert(`邀请任务已创建！正在邀请 ${emails.length} 个成员，请稍候刷新查看进度。`)
       setInviteDialogOpen(false)
       setEmailsText('')
 
-      // 延迟刷新，让任务有时间开始执行
-      setTimeout(() => {
-        fetchTeam()
-      }, 2000)
+      setTimeout(() => fetchTeam(), 2000)
     } catch (error) {
       alert('邀请失败：' + (error instanceof Error ? error.message : '未知错误'))
     } finally {
@@ -324,7 +227,6 @@ export default function TeamDetailPage({ params }: { params: { id: string } }) {
 
   return (
     <div className="container max-w-5xl py-8">
-      {/* Header */}
       <div className="mb-6">
         <Link href="/teams">
           <Button variant="ghost" size="sm" className="mb-4">
@@ -337,7 +239,7 @@ export default function TeamDetailPage({ params }: { params: { id: string } }) {
             <h1 className="text-3xl font-bold mb-2">{team.name}</h1>
             <p className="text-muted-foreground">{team.email}</p>
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap justify-end">
             <Dialog open={inviteDialogOpen} onOpenChange={setInviteDialogOpen}>
               <DialogTrigger asChild>
                 <Button variant="default">
@@ -357,23 +259,16 @@ export default function TeamDetailPage({ params }: { params: { id: string } }) {
                     <Label htmlFor="emails">邮箱地址</Label>
                     <Textarea
                       id="emails"
-                      placeholder="user1@example.com&#10;user2@example.com&#10;user3@example.com"
+                      placeholder="user1@example.com&#10;user2@example.com"
                       value={emailsText}
                       onChange={(e) => setEmailsText(e.target.value)}
                       rows={8}
                       className="font-mono text-sm"
                     />
-                    <p className="text-xs text-muted-foreground">
-                      支持格式：每行一个邮箱，或使用逗号、分号分隔
-                    </p>
                   </div>
                 </div>
                 <DialogFooter>
-                  <Button
-                    variant="outline"
-                    onClick={() => setInviteDialogOpen(false)}
-                    disabled={inviting}
-                  >
+                  <Button variant="outline" onClick={() => setInviteDialogOpen(false)} disabled={inviting}>
                     取消
                   </Button>
                   <Button onClick={inviteMembers} disabled={inviting}>
@@ -392,69 +287,70 @@ export default function TeamDetailPage({ params }: { params: { id: string } }) {
                 </DialogFooter>
               </DialogContent>
             </Dialog>
-            <Button
-              variant="outline"
-              onClick={verifyCredentials}
-              disabled={verifying}
-            >
+
+            <Button variant="outline" onClick={verifyToken} disabled={verifying}>
               {verifying ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               ) : (
                 <Shield className="mr-2 h-4 w-4" />
               )}
-              验证凭据
+              验证 Token
             </Button>
-            <Button
-              variant="outline"
-              onClick={checkLogin}
-              disabled={checkingLogin}
-              className="border-slate-200 hover:bg-slate-50"
-            >
-              {checkingLogin ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <Shield className="mr-2 h-4 w-4" />
-              )}
-              检测登录
-            </Button>
-            <Button
-              variant="outline"
-              onClick={initLogin}
-              disabled={initLoggingIn}
-              className="border-amber-200 hover:bg-amber-50"
-            >
-              {initLoggingIn ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <Shield className="mr-2 h-4 w-4" />
-              )}
-              初始化登录
-            </Button>
-            <Button
-              variant="outline"
-              onClick={assistedSyncMembers}
-              disabled={assistedSyncing}
-              className="border-blue-200 hover:bg-blue-50"
-            >
-              {assistedSyncing ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <Eye className="mr-2 h-4 w-4" />
-              )}
-              辅助同步
-            </Button>
-            <Button
-              variant="outline"
-              onClick={syncMembers}
-              disabled={syncing}
-            >
+
+            <Button variant="outline" onClick={syncMembers} disabled={syncing}>
               {syncing ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               ) : (
                 <RefreshCw className="mr-2 h-4 w-4" />
               )}
-              自动同步
+              同步成员
             </Button>
+
+            <Dialog open={refreshDialogOpen} onOpenChange={setRefreshDialogOpen}>
+              <DialogTrigger asChild>
+                <Button variant="outline" className="border-amber-200 hover:bg-amber-50">
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                  刷新 Token
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="sm:max-w-[525px]">
+                <DialogHeader>
+                  <DialogTitle>刷新 Access Token</DialogTitle>
+                  <DialogDescription>
+                    使用 Refresh Token 获取新的 Access Token
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="grid gap-4 py-4">
+                  <div className="grid gap-2">
+                    <Label htmlFor="refreshToken">Refresh Token</Label>
+                    <Textarea
+                      id="refreshToken"
+                      placeholder="粘贴 refresh token..."
+                      value={refreshToken}
+                      onChange={(e) => setRefreshToken(e.target.value)}
+                      rows={4}
+                      className="font-mono text-xs"
+                    />
+                  </div>
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setRefreshDialogOpen(false)} disabled={refreshing}>
+                    取消
+                  </Button>
+                  <Button onClick={handleRefreshToken} disabled={refreshing}>
+                    {refreshing ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        刷新中...
+                      </>
+                    ) : (
+                      '刷新 Token'
+                    )}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+
             <Link href={`/teams/${params.id}/edit`}>
               <Button variant="outline">
                 <Edit className="mr-2 h-4 w-4" />
@@ -479,6 +375,9 @@ export default function TeamDetailPage({ params }: { params: { id: string } }) {
             <div className="text-2xl font-bold">
               {team.status === 'active' ? '活跃' : team.status === 'error' ? '错误' : '未激活'}
             </div>
+            {team.loginError && (
+              <p className="text-xs text-red-500 mt-1">{team.loginError}</p>
+            )}
           </CardContent>
         </Card>
 
@@ -511,12 +410,15 @@ export default function TeamDetailPage({ params }: { params: { id: string } }) {
         </Card>
       </div>
 
-      {/* Team Info */}
       <Card className="border-2 mb-6">
         <CardHeader>
           <CardTitle>团队信息</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
+          <div>
+            <p className="text-sm font-medium mb-1">Account ID</p>
+            <p className="text-sm text-muted-foreground font-mono">{team.chatgptAccountId}</p>
+          </div>
           {team.description && (
             <div>
               <p className="text-sm font-medium mb-1">描述</p>
@@ -555,7 +457,6 @@ export default function TeamDetailPage({ params }: { params: { id: string } }) {
         </CardContent>
       </Card>
 
-      {/* Members */}
       {team.members && team.members.length > 0 && (
         <Card className="border-2 mb-6">
           <CardHeader>
@@ -620,7 +521,6 @@ export default function TeamDetailPage({ params }: { params: { id: string } }) {
         </Card>
       )}
 
-      {/* Invite Jobs */}
       {team.inviteJobs && team.inviteJobs.length > 0 && (
         <Card className="border-2">
           <CardHeader>
@@ -664,9 +564,7 @@ export default function TeamDetailPage({ params }: { params: { id: string } }) {
                         </span>
                       </TableCell>
                       <TableCell>{job.totalCount}</TableCell>
-                      <TableCell className="text-green-600">
-                        {job.successCount}
-                      </TableCell>
+                      <TableCell className="text-green-600">{job.successCount}</TableCell>
                       <TableCell className="text-red-600">{job.failCount}</TableCell>
                       <TableCell className="text-muted-foreground">
                         {new Date(job.createdAt).toLocaleString('zh-CN')}

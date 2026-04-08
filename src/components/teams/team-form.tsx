@@ -10,12 +10,14 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Loader2, Sparkles } from 'lucide-react'
+import { Loader2 } from 'lucide-react'
 
 const teamSchema = z.object({
   name: z.string().min(1, '团队名称不能为空'),
   email: z.string().email('请输入有效的邮箱地址'),
-  password: z.string().min(6, '密码至少6个字符'),
+  accessToken: z.string().optional().or(z.literal('')),
+  chatgptAccountId: z.string().min(1, 'ChatGPT Account ID 不能为空'),
+  oaiDeviceId: z.string().optional().or(z.literal('')),
   description: z.string().optional(),
   teamUrl: z.string().url('请输入有效的URL').optional().or(z.literal('')),
 })
@@ -31,7 +33,6 @@ interface TeamFormProps {
 export function TeamForm({ mode, initialData, teamId }: TeamFormProps) {
   const router = useRouter()
   const [isSubmitting, setIsSubmitting] = useState(false)
-  const [isAssistedLogin, setIsAssistedLogin] = useState(false)
   const [statusMessage, setStatusMessage] = useState<{
     type: 'success' | 'error' | 'info'
     text: string
@@ -40,90 +41,36 @@ export function TeamForm({ mode, initialData, teamId }: TeamFormProps) {
   const {
     register,
     handleSubmit,
-    setValue,
     formState: { errors },
   } = useForm<TeamFormData>({
     resolver: zodResolver(teamSchema),
     defaultValues: initialData || {
       name: '',
       email: '',
-      password: '',
+      accessToken: '',
+      chatgptAccountId: '',
+      oaiDeviceId: '',
       description: '',
       teamUrl: '',
     },
   })
 
-  // 辅助添加功能
-  const handleAssistedAdd = async () => {
-    setIsAssistedLogin(true)
-    setStatusMessage({
-      type: 'info',
-      text: '正在打开浏览器窗口，请在浏览器中登录 ChatGPT（可能需要验证码/2FA）...',
-    })
-
-    try {
-      const response = await fetch('/api/auth/assisted-login', {
-        method: 'POST',
-      })
-
-      const result = await response.json()
-
-      if (result.success) {
-        // 自动填充邮箱
-        if (result.email) {
-          setValue('email', result.email)
-        }
-
-        setStatusMessage({
-          type: 'success',
-          text: result.message + ' 请填写其他信息并提交。',
-        })
-
-        // 保存 cookies 到 sessionStorage，稍后提交时使用
-        if (result.cookies) {
-          sessionStorage.setItem('chatgpt_cookies', JSON.stringify(result.cookies))
-        }
-      } else {
-        setStatusMessage({
-          type: 'error',
-          text: result.message || '辅助登录失败',
-        })
-      }
-    } catch (error) {
-      setStatusMessage({
-        type: 'error',
-        text: '辅助登录失败: ' + (error instanceof Error ? error.message : '未知错误'),
-      })
-    } finally {
-      setIsAssistedLogin(false)
-    }
-  }
-
-  // 表单提交
   const onSubmit = async (data: TeamFormData) => {
     setIsSubmitting(true)
     setStatusMessage(null)
 
     try {
-      // 从 sessionStorage 获取 cookies（如果有）
-      const cookiesStr =
-        sessionStorage.getItem('chatgpt_cookies') ||
-        sessionStorage.getItem('openai_cookies')
-      const cookies = cookiesStr ? JSON.parse(cookiesStr) : null
-
-      const payload = {
-        ...data,
-        cookies: cookies,
-      }
-
       const url = mode === 'create' ? '/api/teams' : `/api/teams/${teamId}`
       const method = mode === 'create' ? 'POST' : 'PUT'
 
+      const payload: Record<string, unknown> = { ...data }
+      if (mode === 'edit' && !payload.accessToken) {
+        delete payload.accessToken
+      }
+
       const response = await fetch(url, {
         method,
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       })
 
@@ -135,47 +82,10 @@ export function TeamForm({ mode, initialData, teamId }: TeamFormProps) {
           text: mode === 'create' ? '团队创建成功！' : '团队更新成功！',
         })
 
-        // 清除 sessionStorage
-        sessionStorage.removeItem('chatgpt_cookies')
-        sessionStorage.removeItem('openai_cookies')
-
-        // 创建后可选进行一次初始化登录（保存会话，后续自动化无需重复登录）
-        if (mode === 'create' && result?.id) {
-          const shouldInit = confirm(
-            '是否现在初始化登录 ChatGPT 并保存登录状态？（会打开浏览器窗口，可能需要验证码/2FA）'
-          )
-          if (shouldInit) {
-            setStatusMessage({
-              type: 'info',
-              text: '正在初始化登录，请在打开的浏览器窗口中完成登录...',
-            })
-
-            try {
-              const initResp = await fetch(`/api/teams/${result.id}/init-login`, {
-                method: 'POST',
-              })
-              const initResult = await initResp.json()
-              setStatusMessage({
-                type: initResp.ok ? 'success' : 'error',
-                text:
-                  initResult.message ||
-                  (initResp.ok ? '初始化登录成功' : '初始化登录失败'),
-              })
-            } catch (e) {
-              setStatusMessage({
-                type: 'error',
-                text: '初始化登录失败，请稍后在团队详情页点击“初始化登录”重试',
-              })
-            }
-          }
-
-          router.push(`/teams/${result.id}`)
-          return
-        }
-
-        // 跳转到团队列表或详情页
         setTimeout(() => {
-          if (mode === 'create') {
+          if (mode === 'create' && result?.id) {
+            router.push(`/teams/${result.id}`)
+          } else if (mode === 'create') {
             router.push('/teams')
           } else {
             router.push(`/teams/${teamId}`)
@@ -184,7 +94,9 @@ export function TeamForm({ mode, initialData, teamId }: TeamFormProps) {
       } else {
         setStatusMessage({
           type: 'error',
-          text: result.error || '操作失败',
+          text: result.details
+            ? result.details.map((d: { message: string; path: string[] }) => `${d.path.join('.')}: ${d.message}`).join('; ')
+            : result.error || '操作失败',
         })
       }
     } catch (error) {
@@ -203,12 +115,11 @@ export function TeamForm({ mode, initialData, teamId }: TeamFormProps) {
         <CardTitle>{mode === 'create' ? '创建新团队' : '编辑团队'}</CardTitle>
         <CardDescription>
           {mode === 'create'
-            ? '添加一个新的 GPT 团队到管理系统'
+            ? '添加一个新的 GPT 团队，需要提供 ChatGPT Bearer Token 和 Account ID'
             : '更新团队信息'}
         </CardDescription>
       </CardHeader>
       <CardContent>
-        {/* 状态消息 */}
         {statusMessage && (
           <div
             className={`mb-4 p-4 rounded-md ${
@@ -223,42 +134,7 @@ export function TeamForm({ mode, initialData, teamId }: TeamFormProps) {
           </div>
         )}
 
-        {/* 辅助添加按钮 */}
-        {mode === 'create' && (
-          <div className="mb-6">
-            <Button
-              type="button"
-              onClick={handleAssistedAdd}
-              disabled={isAssistedLogin}
-              variant="outline"
-              className="w-full border-2 border-dashed border-primary/50 hover:border-primary hover:bg-primary/5"
-            >
-              {isAssistedLogin ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  正在打开浏览器...
-                </>
-              ) : (
-                <>
-                  <Sparkles className="mr-2 h-4 w-4" />
-                  辅助添加（自动登录）
-                </>
-              )}
-            </Button>
-            <p className="text-xs text-muted-foreground mt-2 text-center">
-              点击后会打开浏览器窗口，在浏览器中登录 ChatGPT，系统会自动保存登录信息（用于后续自动化）
-            </p>
-            <div className="my-4 flex items-center">
-              <div className="flex-1 border-t border-border"></div>
-              <span className="px-4 text-xs text-muted-foreground">或手动填写</span>
-              <div className="flex-1 border-t border-border"></div>
-            </div>
-          </div>
-        )}
-
-        {/* 表单 */}
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-          {/* 团队名称 */}
           <div className="space-y-2">
             <Label htmlFor="name">
               团队名称 <span className="text-red-500">*</span>
@@ -273,10 +149,9 @@ export function TeamForm({ mode, initialData, teamId }: TeamFormProps) {
             )}
           </div>
 
-          {/* 邮箱 */}
           <div className="space-y-2">
             <Label htmlFor="email">
-              邮箱 <span className="text-red-500">*</span>
+              账号邮箱 <span className="text-red-500">*</span>
             </Label>
             <Input
               id="email"
@@ -284,37 +159,68 @@ export function TeamForm({ mode, initialData, teamId }: TeamFormProps) {
               placeholder="team@example.com"
               {...register('email')}
             />
+            <p className="text-xs text-muted-foreground">仅作标识，不用于登录</p>
             {errors.email && (
               <p className="text-sm text-red-500">{errors.email.message}</p>
             )}
           </div>
 
-          {/* 密码 */}
           <div className="space-y-2">
-            <Label htmlFor="password">
-              密码 <span className="text-red-500">*</span>
+            <Label htmlFor="accessToken">
+              Access Token {mode === 'create' && <span className="text-red-500">*</span>}
+            </Label>
+            <Textarea
+              id="accessToken"
+              placeholder={mode === 'edit' ? '留空则保持原 Token 不变' : 'eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIs...'}
+              rows={3}
+              className="font-mono text-xs"
+              {...register('accessToken')}
+            />
+            <p className="text-xs text-muted-foreground">
+              ChatGPT 的 Bearer Token（从浏览器 DevTools 的 Network 请求头中获取）
+            </p>
+            {errors.accessToken && (
+              <p className="text-sm text-red-500">{errors.accessToken.message}</p>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="chatgptAccountId">
+              ChatGPT Account ID <span className="text-red-500">*</span>
             </Label>
             <Input
-              id="password"
-              type="password"
-              placeholder="输入账号密码"
-              {...register('password')}
+              id="chatgptAccountId"
+              placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+              className="font-mono"
+              {...register('chatgptAccountId')}
             />
-            {errors.password && (
-              <p className="text-sm text-red-500">{errors.password.message}</p>
-            )}
             <p className="text-xs text-muted-foreground">
-              密码将被加密存储
+              工作空间的 account ID（从请求头 chatgpt-account-id 中获取）
+            </p>
+            {errors.chatgptAccountId && (
+              <p className="text-sm text-red-500">{errors.chatgptAccountId.message}</p>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="oaiDeviceId">OAI Device ID</Label>
+            <Input
+              id="oaiDeviceId"
+              placeholder="可选"
+              className="font-mono"
+              {...register('oaiDeviceId')}
+            />
+            <p className="text-xs text-muted-foreground">
+              可选，从请求头 oai-device-id 中获取
             </p>
           </div>
 
-          {/* 团队 URL */}
           <div className="space-y-2">
             <Label htmlFor="teamUrl">团队 URL</Label>
             <Input
               id="teamUrl"
               type="url"
-              placeholder="https://platform.openai.com/..."
+              placeholder="https://chatgpt.com/..."
               {...register('teamUrl')}
             />
             {errors.teamUrl && (
@@ -322,7 +228,6 @@ export function TeamForm({ mode, initialData, teamId }: TeamFormProps) {
             )}
           </div>
 
-          {/* 描述 */}
           <div className="space-y-2">
             <Label htmlFor="description">描述</Label>
             <Textarea
@@ -331,12 +236,8 @@ export function TeamForm({ mode, initialData, teamId }: TeamFormProps) {
               rows={3}
               {...register('description')}
             />
-            {errors.description && (
-              <p className="text-sm text-red-500">{errors.description.message}</p>
-            )}
           </div>
 
-          {/* 提交按钮 */}
           <div className="flex gap-3 pt-4">
             <Button
               type="button"
