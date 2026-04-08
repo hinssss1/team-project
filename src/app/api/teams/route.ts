@@ -2,8 +2,15 @@ import { NextRequest, NextResponse } from 'next/server'
 import { teamService } from '@/lib/services/team.service'
 import { createTeamSchema } from '@/lib/utils/validation'
 import { z } from 'zod'
+import { auth } from '@/auth'
 
 export async function GET() {
+  const session = await auth()
+
+  if (!session) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
   try {
     const teams = await teamService.getAllTeams()
     const result = teams.map((team) => ({
@@ -28,6 +35,12 @@ export async function GET() {
 }
 
 export async function POST(request: NextRequest) {
+  const session = await auth()
+
+  if (!session) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
   try {
     const body = await request.json()
     const validatedData = createTeamSchema.parse(body)
